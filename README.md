@@ -86,6 +86,7 @@ pingpong <expression>
 | Path | Purpose |
 | --- | --- |
 | `src/avatar_engine.*` | Expression catalogue, timelines, easing, drawing and interaction physics |
+| `src/eye_rasterizer.*` | Anti-aliased scanline rasterizer for the eye, brow and effect shapes |
 | `src/main.cpp` | Device setup, touch/IMU/buttons, vibration, diagnostics and serial commands |
 | `docs/HARDWARE_BASELINE.md` | Hardware capabilities and verification boundary |
 | `docs/ENGINEERING_NOTES.md` | Rendering experiments, measurements and implementation decisions |

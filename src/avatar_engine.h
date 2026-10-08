@@ -4,6 +4,8 @@
 
 #include <M5Unified.h>
 
+#include "eye_rasterizer.h"
+
 enum class ExpressionId : uint8_t {
   Idle = 0,
   Listening,
@@ -145,6 +147,7 @@ class AvatarEngine {
                                 float amount);
   static float ease(Easing easing, float progress);
   static DirtyRect mergeRects(const DirtyRect& first, const DirtyRect& second);
+  static bool rectsOverlap(const DirtyRect& first, const DirtyRect& second);
 
   ExpressionId adjacentExpression(int8_t direction) const;
   void startKeyframe(uint8_t index, uint32_t nowMs,
@@ -154,14 +157,14 @@ class AvatarEngine {
   void scheduleNextBlink(uint32_t nowMs, bool useInitialDelay);
   void updateInteraction(uint32_t nowMs);
   void render(uint32_t nowMs);
-  void drawEye(const EyePose& eye, float centerX, float centerY, float blink);
-  void drawDizzyEyePattern(const EyePose& eye, float centerX, float centerY,
-                           int8_t side, uint32_t nowMs);
-  void drawDizzyLightning(const EyePose& eye, float centerX, float centerY,
+  void addEyeShapes(const EyePose& eye, float centerX, float centerY,
+                    float blink);
+  void addDizzyEyePattern(const EyePose& eye, float centerX, float centerY,
                           int8_t side, uint32_t nowMs);
-  DirtyRect eyeBounds(const EyePose& eye, float centerX, float centerY,
-                      float blink) const;
-  void clearDirtyRect(const DirtyRect& rect);
+  void addDizzyLightning(const EyePose& eye, float centerX, float centerY,
+                         int8_t side, uint32_t nowMs);
+  DirtyRect shapeBounds(uint8_t first, uint8_t end) const;
+  void presentRegion(const DirtyRect& rect);
   float blinkScale(uint32_t nowMs);
   void recordRenderMetrics(uint32_t nowMs, uint32_t renderStartedUs,
                            uint32_t renderFinishedUs);
@@ -234,4 +237,5 @@ class AvatarEngine {
   uint32_t previousRenderStartedUs_ = 0;
   DirtyRect previousLeftBounds_{};
   DirtyRect previousRightBounds_{};
+  EyeRasterizer rasterizer_;
 };

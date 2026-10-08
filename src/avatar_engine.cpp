@@ -14,10 +14,14 @@ constexpr float kDesignSize = 1000.0f;
 constexpr uint32_t kFrameIntervalUs = 16667;
 constexpr uint32_t kMetricsReportIntervalMs = 5000;
 constexpr uint16_t kBackground = TFT_BLACK;
-constexpr uint16_t kEyeColor = TFT_WHITE;
-// One fast grayscale coverage step softens the high-contrast silhouette
-// without the display readback required by alpha-blended smooth primitives.
-constexpr uint16_t kEyeEdgeColor = 0x738E;
+constexpr float kBackgroundBrightness = 0.0f;
+constexpr float kEyeBrightness = 1.0f;
+// Eye regions are rasterized in bands into internal RAM and copied to the
+// display as finished pixels, so every frame writes each region exactly once
+// instead of clearing it and overdrawing shapes.
+constexpr int kBandWidth = 480;
+constexpr int kBandPixels = kBandWidth * 16;
+uint16_t bandPixels[kBandPixels];
 constexpr float kTouchTravelX = 70.0f;
 constexpr float kTouchTravelY = 56.0f;
 constexpr float kTiltTravelX = 112.0f;
@@ -995,101 +999,35 @@ float AvatarEngine::blinkScale(uint32_t nowMs) {
   return kClosedScale + (1.0f - kClosedScale) * progress;
 }
 
-void AvatarEngine::drawEye(const EyePose& eye, float centerX, float centerY,
-                           float blink) {
+void AvatarEngine::addEyeShapes(const EyePose& eye, float centerX,
+                                float centerY, float blink) {
   const float eyeX = centerX + eye.x;
   const float eyeY = centerY + eye.y;
-  const int width = std::max(4, static_cast<int>(lroundf(eye.width)));
-  const int height =
-      std::max(4, static_cast<int>(lroundf(eye.height * blink)));
-  const int left = lroundf(eyeX - width * 0.5f);
-  const int top = lroundf(eyeY - height * 0.5f);
-  const int radius = std::max(
-      2, static_cast<int>(lroundf(std::min(width, height) * 0.5f *
-                                  clamp01(eye.roundness))));
+  const float width = std::max(4.0f, eye.width);
+  const float height = std::max(4.0f, eye.height * blink);
+  const float radius = std::max(
+      2.0f, std::min(width, height) * 0.5f * clamp01(eye.roundness));
 
+  // Lids and brows are drawn for an upright eye, so only plain rounded eyes
+  // follow the head roll.
   const bool canRotate = fabsf(eye.angle) > 0.25f &&
                          eye.upperLid < 0.01f && eye.lowerLid < 0.01f &&
                          eye.browOpacity < 0.01f && eye.roundness > 0.92f;
-  if (canRotate) {
-    const float angle = eye.angle * kPi / 180.0f;
-    const bool vertical = height >= width;
-    const float major = vertical ? height : width;
-    const float minor = vertical ? width : height;
-    const float lineLength = std::max(0.0f, major - minor);
-    const float axisX = vertical ? -sinf(angle) : cosf(angle);
-    const float axisY = vertical ? cosf(angle) : sinf(angle);
-    if (lineLength < 1.0f) {
-      const int circleRadius =
-          std::max(2, static_cast<int>(lroundf(minor * 0.5f)));
-      M5.Display.fillCircle(lroundf(eyeX), lroundf(eyeY), circleRadius + 1,
-                            kEyeEdgeColor);
-      M5.Display.fillCircle(lroundf(eyeX), lroundf(eyeY), circleRadius,
-                            kEyeColor);
-    } else {
-      const float halfLine = lineLength * 0.5f;
-      const float radius = std::max(2.0f, minor * 0.5f);
-      const float startX = eyeX - axisX * halfLine;
-      const float startY = eyeY - axisY * halfLine;
-      const float endX = eyeX + axisX * halfLine;
-      const float endY = eyeY + axisY * halfLine;
-      const auto fillCapsule = [&](float capsuleRadius, uint16_t color) {
-        const float perpendicularX = -axisY * capsuleRadius;
-        const float perpendicularY = axisX * capsuleRadius;
-        const int16_t startLeftX = lroundf(startX + perpendicularX);
-        const int16_t startLeftY = lroundf(startY + perpendicularY);
-        const int16_t startRightX = lroundf(startX - perpendicularX);
-        const int16_t startRightY = lroundf(startY - perpendicularY);
-        const int16_t endLeftX = lroundf(endX + perpendicularX);
-        const int16_t endLeftY = lroundf(endY + perpendicularY);
-        const int16_t endRightX = lroundf(endX - perpendicularX);
-        const int16_t endRightY = lroundf(endY - perpendicularY);
-        M5.Display.fillTriangle(startLeftX, startLeftY, startRightX,
-                                startRightY, endLeftX, endLeftY, color);
-        M5.Display.fillTriangle(startRightX, startRightY, endRightX,
-                                endRightY, endLeftX, endLeftY, color);
-        const int capRadius =
-            std::max(2, static_cast<int>(lroundf(capsuleRadius)));
-        M5.Display.fillCircle(lroundf(startX), lroundf(startY), capRadius,
-                              color);
-        M5.Display.fillCircle(lroundf(endX), lroundf(endY), capRadius, color);
-      };
-      fillCapsule(radius + 1.2f, kEyeEdgeColor);
-      fillCapsule(radius, kEyeColor);
-    }
-  } else {
-    M5.Display.fillRoundRect(left - 1, top - 1, width + 2, height + 2,
-                             radius + 1, kEyeEdgeColor);
-    M5.Display.fillRoundRect(left, top, width, height, radius, kEyeColor);
-  }
+  const float angle = canRotate ? eye.angle * kPi / 180.0f : 0.0f;
 
-  const int upperCover = lroundf(clamp01(eye.upperLid) * height);
-  if (upperCover > 0) {
-    M5.Display.fillRect(left - 1, top - 1, width + 2, upperCover + 1,
-                        kBackground);
-  }
-  const int upperTilt =
-      lroundf(fabsf(eye.upperLidTilt) * height * 0.34f);
-  if (upperTilt > 0) {
-    const int lidY = top + upperCover;
-    if (eye.upperLidTilt > 0.0f) {
-      M5.Display.fillTriangle(left, lidY, left + width, lidY,
-                              left + width, lidY + upperTilt, kBackground);
-      M5.Display.drawLine(left, lidY, left + width, lidY + upperTilt,
-                          kEyeEdgeColor);
-    } else {
-      M5.Display.fillTriangle(left, lidY + upperTilt, left, lidY,
-                              left + width, lidY, kBackground);
-      M5.Display.drawLine(left, lidY + upperTilt, left + width, lidY,
-                          kEyeEdgeColor);
-    }
-  }
-
-  const int lowerCover = lroundf(clamp01(eye.lowerLid) * height);
-  if (lowerCover > 0) {
-    M5.Display.fillRect(left - 1, top + height - lowerCover, width + 2,
-                        lowerCover + 1, kBackground);
-  }
+  // Lid cuts are expressed in the eye's local frame, centred on the eye. The
+  // upper lid line runs from one side of the eye to the other, dropping by
+  // upperTilt towards the side the tilt points at.
+  const float upperCover = clamp01(eye.upperLid) * height;
+  const float upperTilt = fabsf(eye.upperLidTilt) * height * 0.34f;
+  const float upperLidY = -height * 0.5f + upperCover + upperTilt * 0.5f;
+  const float upperLidSlope =
+      (eye.upperLidTilt > 0.0f ? upperTilt : -upperTilt) / width;
+  const float lowerCover = clamp01(eye.lowerLid) * height;
+  rasterizer_.addEye(eyeX, eyeY, width * 0.5f, height * 0.5f, radius, angle,
+                     upperCover > 0.0f || upperTilt > 0.0f, upperLidY,
+                     upperLidSlope, lowerCover > 0.0f,
+                     height * 0.5f - lowerCover, kEyeBrightness);
 
   const float browOpacity = clamp01(eye.browOpacity);
   if (browOpacity > 0.01f) {
@@ -1100,19 +1038,15 @@ void AvatarEngine::drawEye(const EyePose& eye, float centerX, float centerY,
     const float browCenterY = eyeY + eye.browY;
     const float browRadius =
         std::max(2.0f, std::min(eye.width, eye.height) * 0.04f);
-    const uint8_t brightness =
-        static_cast<uint8_t>(160.0f + 95.0f * browOpacity);
-    const uint16_t browColor =
-        M5.Display.color565(brightness, brightness, brightness);
-    M5.Display.drawWideLine(lroundf(eyeX - dx), lroundf(browCenterY - dy),
-                            lroundf(eyeX + dx), lroundf(browCenterY + dy),
-                            browRadius, browColor);
+    const float brightness = (160.0f + 95.0f * browOpacity) / 255.0f;
+    rasterizer_.addCapsule(eyeX - dx, browCenterY - dy, eyeX + dx,
+                           browCenterY + dy, browRadius, brightness);
   }
 }
 
-void AvatarEngine::drawDizzyEyePattern(const EyePose& eye, float centerX,
-                                       float centerY, int8_t side,
-                                       uint32_t nowMs) {
+void AvatarEngine::addDizzyEyePattern(const EyePose& eye, float centerX,
+                                      float centerY, int8_t side,
+                                      uint32_t nowMs) {
   const float eyeX = centerX + eye.x;
   const float eyeY = centerY + eye.y;
   const float radius = std::min(eye.width, eye.height) * 0.5f;
@@ -1125,24 +1059,23 @@ void AvatarEngine::drawDizzyEyePattern(const EyePose& eye, float centerX,
   const float phase = time * (3.0f + shakeIntensity_ * 1.8f) +
                       (side > 0 ? kPi : 0.0f);
   constexpr float kRadiusScale[] = {0.74f, 0.58f, 0.43f, 0.29f, 0.14f};
-  constexpr uint16_t kColors[] = {kBackground, kEyeColor, kBackground,
-                                  kEyeColor, kBackground};
+  constexpr float kBrightness[] = {kBackgroundBrightness, kEyeBrightness,
+                                   kBackgroundBrightness, kEyeBrightness,
+                                   kBackgroundBrightness};
 
   for (uint8_t index = 0; index < 5; ++index) {
     const float orbit = radius * (0.025f + index * 0.014f);
     const float layerPhase = phase + index * 0.82f;
-    const int layerX = lroundf(eyeX + cosf(layerPhase) * orbit);
-    const int layerY = lroundf(eyeY + sinf(layerPhase) * orbit);
-    const int layerRadius =
-        std::max(2, static_cast<int>(lroundf(radius * kRadiusScale[index])));
-    M5.Display.fillCircle(layerX, layerY, layerRadius + 1, kEyeEdgeColor);
-    M5.Display.fillCircle(layerX, layerY, layerRadius, kColors[index]);
+    rasterizer_.addDisc(eyeX + cosf(layerPhase) * orbit,
+                        eyeY + sinf(layerPhase) * orbit,
+                        std::max(2.0f, radius * kRadiusScale[index]),
+                        kBrightness[index]);
   }
 }
 
-void AvatarEngine::drawDizzyLightning(const EyePose& eye, float centerX,
-                                      float centerY, int8_t side,
-                                      uint32_t nowMs) {
+void AvatarEngine::addDizzyLightning(const EyePose& eye, float centerX,
+                                     float centerY, int8_t side,
+                                     uint32_t nowMs) {
   const uint8_t periodSlots = shakeIntensity_ > 0.55f ? 7 : 12;
   const uint8_t sideOffset = side > 0 ? periodSlots / 2 : 0;
   const uint8_t slot = (nowMs / 85 + sideOffset) % periodSlots;
@@ -1151,25 +1084,21 @@ void AvatarEngine::drawDizzyLightning(const EyePose& eye, float centerX,
   const float eyeX = centerX + eye.x;
   const float eyeY = centerY + eye.y;
   const float radius = std::max(eye.width, eye.height) * 0.5f;
-  const int direction = side < 0 ? -1 : 1;
-  const int x0 = lroundf(eyeX + direction * radius * 0.72f);
-  const int y0 = lroundf(eyeY - radius * 0.48f);
-  const int x1 = x0 + direction * 9;
-  const int y1 = y0 - 8;
-  const int x2 = x1 - direction * 4;
-  const int y2 = y1 - 9;
-  const int x3 = x2 + direction * 11;
-  const int y3 = y2 - 9;
+  const float direction = side < 0 ? -1.0f : 1.0f;
+  const float x0 = eyeX + direction * radius * 0.72f;
+  const float y0 = eyeY - radius * 0.48f;
+  const float x1 = x0 + direction * 9.0f;
+  const float y1 = y0 - 8.0f;
+  const float x2 = x1 - direction * 4.0f;
+  const float y2 = y1 - 9.0f;
+  const float x3 = x2 + direction * 11.0f;
+  const float y3 = y2 - 9.0f;
 
-  const auto drawBoltSegment = [](int startX, int startY, int endX,
-                                  int endY) {
-    M5.Display.drawLine(startX - 1, startY, endX - 1, endY, kEyeEdgeColor);
-    M5.Display.drawLine(startX + 1, startY, endX + 1, endY, kEyeEdgeColor);
-    M5.Display.drawLine(startX, startY, endX, endY, kEyeColor);
-  };
-  drawBoltSegment(x0, y0, x1, y1);
-  drawBoltSegment(x1, y1, x2, y2);
-  drawBoltSegment(x2, y2, x3, y3);
+  // A thin stroke whose anti-aliased rim replaces the old gray side lines.
+  constexpr float kBoltRadius = 1.2f;
+  rasterizer_.addCapsule(x0, y0, x1, y1, kBoltRadius, kEyeBrightness);
+  rasterizer_.addCapsule(x1, y1, x2, y2, kBoltRadius, kEyeBrightness);
+  rasterizer_.addCapsule(x2, y2, x3, y3, kBoltRadius, kEyeBrightness);
 }
 
 AvatarEngine::DirtyRect AvatarEngine::mergeRects(const DirtyRect& first,
@@ -1187,44 +1116,57 @@ AvatarEngine::DirtyRect AvatarEngine::mergeRects(const DirtyRect& first,
           static_cast<int16_t>(bottom - top), true};
 }
 
-AvatarEngine::DirtyRect AvatarEngine::eyeBounds(const EyePose& eye,
-                                                 float centerX, float centerY,
-                                                 float blink) const {
-  const float eyeX = centerX + eye.x;
-  const float eyeY = centerY + eye.y;
-  const float radians = eye.angle * kPi / 180.0f;
-  const float baseHalfWidth = eye.width * 0.5f;
-  const float baseHalfHeight = eye.height * blink * 0.5f;
-  float halfWidth = fabsf(cosf(radians)) * baseHalfWidth +
-                    fabsf(sinf(radians)) * baseHalfHeight;
-  float halfHeight = fabsf(sinf(radians)) * baseHalfWidth +
-                     fabsf(cosf(radians)) * baseHalfHeight;
-  float topExtent = halfHeight;
-
-  if (eye.browOpacity > 0.01f) {
-    const float browRadians = eye.browTilt * kPi / 180.0f;
-    const float halfBrowWidth = fabsf(cosf(browRadians)) * eye.width * 0.44f;
-    const float halfBrowHeight = fabsf(sinf(browRadians)) * eye.width * 0.44f +
-                                 std::min(eye.width, eye.height) * 0.04f;
-    halfWidth = std::max(halfWidth, halfBrowWidth);
-    topExtent = std::max(topExtent, -eye.browY + halfBrowHeight);
-  }
-
-  constexpr int kPadding = 4;
-  const int left = std::max(0, static_cast<int>(floorf(eyeX - halfWidth)) - kPadding);
-  const int top = std::max(0, static_cast<int>(floorf(eyeY - topExtent)) - kPadding);
-  const int right = std::min(M5.Display.width(),
-                             static_cast<int>(ceilf(eyeX + halfWidth)) + kPadding);
-  const int bottom = std::min(M5.Display.height(),
-                              static_cast<int>(ceilf(eyeY + halfHeight)) + kPadding);
-  return {static_cast<int16_t>(left), static_cast<int16_t>(top),
-          static_cast<int16_t>(std::max(0, right - left)),
-          static_cast<int16_t>(std::max(0, bottom - top)), true};
+bool AvatarEngine::rectsOverlap(const DirtyRect& first,
+                                const DirtyRect& second) {
+  return first.valid && second.valid &&
+         first.x < second.x + second.width &&
+         second.x < first.x + first.width &&
+         first.y < second.y + second.height &&
+         second.y < first.y + first.height;
 }
 
-void AvatarEngine::clearDirtyRect(const DirtyRect& rect) {
+AvatarEngine::DirtyRect AvatarEngine::shapeBounds(uint8_t first,
+                                                  uint8_t end) const {
+  int left = 0;
+  int top = 0;
+  int right = 0;
+  int bottom = 0;
+  if (!rasterizer_.bounds(first, end, left, top, right, bottom)) return {};
+  left = std::max(0, left);
+  top = std::max(0, top);
+  right = std::min<int>(M5.Display.width(), right);
+  bottom = std::min<int>(M5.Display.height(), bottom);
+  if (left >= right || top >= bottom) return {};
+  return {static_cast<int16_t>(left), static_cast<int16_t>(top),
+          static_cast<int16_t>(right - left),
+          static_cast<int16_t>(bottom - top), true};
+}
+
+void AvatarEngine::presentRegion(const DirtyRect& rect) {
   if (!rect.valid || rect.width <= 0 || rect.height <= 0) return;
-  M5.Display.fillRect(rect.x, rect.y, rect.width, rect.height, kBackground);
+  // The AMOLED controller addresses pixels in pairs, so keep regions even.
+  const int left = rect.x & ~1;
+  const int top = rect.y & ~1;
+  const int right =
+      std::min<int>(M5.Display.width(), (rect.x + rect.width + 1) & ~1);
+  const int bottom =
+      std::min<int>(M5.Display.height(), (rect.y + rect.height + 1) & ~1);
+
+  // Each region is its own write transaction, so the frame buffer sends only
+  // this region to the panel rather than the whole span between both eyes.
+  M5.Display.startWrite();
+  for (int x = left; x < right; x += kBandWidth) {
+    const int columns = std::min(kBandWidth, right - x);
+    // Narrow regions fit more rows per band, so they need fewer copies.
+    const int bandRows = kBandPixels / columns;
+    for (int y = top; y < bottom; y += bandRows) {
+      const int rows = std::min(bandRows, bottom - y);
+      rasterizer_.render(x, y, columns, rows, bandPixels);
+      M5.Display.pushImage(x, y, columns, rows,
+                           reinterpret_cast<const lgfx::swap565_t*>(bandPixels));
+    }
+  }
+  M5.Display.endWrite();
 }
 
 void AvatarEngine::render(uint32_t nowMs) {
@@ -1310,54 +1252,48 @@ void AvatarEngine::render(uint32_t nowMs) {
   scaleEye(renderedPose.leftEye);
   scaleEye(renderedPose.rightEye);
 
-  const int centerX =
-      width / 2 +
-      lroundf((renderedPose.faceX + motion.faceX) * designScale +
-              swipeOffsetX_ + shakeOffsetX_ * designScale * 0.30f);
-  const int centerY =
-      height / 2 +
-      lroundf((renderedPose.faceY + motion.faceY) * designScale +
-              swipeOffsetY_ + shakeOffsetY_ * designScale * 0.30f);
+  // Positions stay fractional: the rasterizer places edges at sub-pixel
+  // precision, so slow motion glides instead of stepping a pixel at a time.
+  const float centerX =
+      width / 2 + (renderedPose.faceX + motion.faceX) * designScale +
+      swipeOffsetX_ + shakeOffsetX_ * designScale * 0.30f;
+  const float centerY =
+      height / 2 + (renderedPose.faceY + motion.faceY) * designScale +
+      swipeOffsetY_ + shakeOffsetY_ * designScale * 0.30f;
 
   const float blink = blinkScale(nowMs);
-  DirtyRect leftBounds =
-      eyeBounds(renderedPose.leftEye, centerX, centerY, blink);
-  DirtyRect rightBounds =
-      eyeBounds(renderedPose.rightEye, centerX, centerY, blink);
-  if (targetExpression_ == ExpressionId::Dizzy) {
-    const auto expandForLightning = [width, height](DirtyRect& bounds) {
-      constexpr int kEffectPadding = 28;
-      const int left = std::max(0, bounds.x - kEffectPadding);
-      const int top = std::max(0, bounds.y - kEffectPadding);
-      const int right =
-          std::min(width, bounds.x + bounds.width + kEffectPadding);
-      const int bottom =
-          std::min(height, bounds.y + bounds.height + kEffectPadding);
-      bounds = {static_cast<int16_t>(left), static_cast<int16_t>(top),
-                static_cast<int16_t>(right - left),
-                static_cast<int16_t>(bottom - top), true};
-    };
-    expandForLightning(leftBounds);
-    expandForLightning(rightBounds);
+  const bool dizzy = targetExpression_ == ExpressionId::Dizzy;
+  rasterizer_.clear();
+  addEyeShapes(renderedPose.leftEye, centerX, centerY, blink);
+  if (dizzy) {
+    addDizzyEyePattern(renderedPose.leftEye, centerX, centerY, -1, nowMs);
+    addDizzyLightning(renderedPose.leftEye, centerX, centerY, -1, nowMs);
   }
+  const uint8_t leftShapeCount = rasterizer_.shapeCount();
+  addEyeShapes(renderedPose.rightEye, centerX, centerY, blink);
+  if (dizzy) {
+    addDizzyEyePattern(renderedPose.rightEye, centerX, centerY, 1, nowMs);
+    addDizzyLightning(renderedPose.rightEye, centerX, centerY, 1, nowMs);
+  }
+  // Each eye's bounds are exactly where its shapes can draw this frame.
+  const DirtyRect leftBounds = shapeBounds(0, leftShapeCount);
+  const DirtyRect rightBounds =
+      shapeBounds(leftShapeCount, rasterizer_.shapeCount());
 
-  M5.Display.startWrite();
   if (requiresFullClear_) {
     M5.Display.fillScreen(kBackground);
     requiresFullClear_ = false;
+  }
+  // Each region covers where an eye was last frame and where it is now, so
+  // rendering it in full both erases the old pixels and draws the new ones.
+  const DirtyRect leftRegion = mergeRects(previousLeftBounds_, leftBounds);
+  const DirtyRect rightRegion = mergeRects(previousRightBounds_, rightBounds);
+  if (rectsOverlap(leftRegion, rightRegion)) {
+    presentRegion(mergeRects(leftRegion, rightRegion));
   } else {
-    clearDirtyRect(mergeRects(previousLeftBounds_, leftBounds));
-    clearDirtyRect(mergeRects(previousRightBounds_, rightBounds));
+    presentRegion(leftRegion);
+    presentRegion(rightRegion);
   }
-  drawEye(renderedPose.leftEye, centerX, centerY, blink);
-  drawEye(renderedPose.rightEye, centerX, centerY, blink);
-  if (targetExpression_ == ExpressionId::Dizzy) {
-    drawDizzyEyePattern(renderedPose.leftEye, centerX, centerY, -1, nowMs);
-    drawDizzyEyePattern(renderedPose.rightEye, centerX, centerY, 1, nowMs);
-    drawDizzyLightning(renderedPose.leftEye, centerX, centerY, -1, nowMs);
-    drawDizzyLightning(renderedPose.rightEye, centerX, centerY, 1, nowMs);
-  }
-  M5.Display.endWrite();
 
   previousLeftBounds_ = leftBounds;
   previousRightBounds_ = rightBounds;

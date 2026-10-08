@@ -86,6 +86,7 @@ pingpong <expression>
 | 路径 | 用途 |
 | --- | --- |
 | `src/avatar_engine.*` | 表情目录、时间轴、缓动、绘制和交互物理 |
+| `src/eye_rasterizer.*` | 眼睛、眉线和特效形状的抗锯齿扫描线光栅化 |
 | `src/main.cpp` | 设备初始化、触摸、IMU、按键、震动、诊断和串口命令 |
 | `docs/HARDWARE_BASELINE.md` | 硬件能力和验证边界 |
 | `docs/ENGINEERING_NOTES.md` | 渲染实验、测量数据和实现决策 |
