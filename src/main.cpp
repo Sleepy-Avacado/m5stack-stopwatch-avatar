@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 #include <Arduino.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/semphr.h>
 #include <M5IOE1.h>
 #include <M5Unified.h>
 
@@ -9,6 +11,12 @@
 namespace {
 
 constexpr uint8_t kIoeAddress = 0x4F;
+// The AMOLED's tearing-effect output, pulsed when a refresh scan has passed
+// the last row.
+constexpr uint8_t kPanelRefreshPin = 38;
+// A refresh that began this recently still has its scan above the eyes.
+constexpr uint32_t kLatePresentWindowUs = 2000;
+constexpr TickType_t kPanelRefreshTimeoutTicks = pdMS_TO_TICKS(50);
 constexpr uint8_t kVibrationPwmRegister = 0x1B;
 constexpr uint32_t kIoeBusFrequency = M5IOE1_I2C_FREQ_100K;
 constexpr uint32_t kDiagnosticRefreshIntervalMs = 100;
@@ -462,6 +470,34 @@ void handleDiagnosticToggle() {
   }
 }
 
+SemaphoreHandle_t panelRefreshSignal = nullptr;
+volatile uint32_t lastPanelRefreshUs = 0;
+
+void IRAM_ATTR onPanelRefresh() {
+  lastPanelRefreshUs = micros();
+  BaseType_t taskWoken = pdFALSE;
+  xSemaphoreGiveFromISR(panelRefreshSignal, &taskWoken);
+  if (taskWoken) portYIELD_FROM_ISR();
+}
+
+// The panel scans its memory top to bottom about 60 times a second, and a
+// frame sent while the scan crosses an eye shows half old, half new. A frame
+// sent right after a refresh starts stays ahead of the scan, because the
+// transfer moves down the screen faster than the scan does.
+void presentOnPanelRefresh() {
+  if (micros() - lastPanelRefreshUs >= kLatePresentWindowUs) {
+    // A pulse from earlier in the frame is stale: the scan has moved on.
+    xSemaphoreTake(panelRefreshSignal, 0);
+    if (micros() - lastPanelRefreshUs >= kLatePresentWindowUs &&
+        xSemaphoreTake(panelRefreshSignal, kPanelRefreshTimeoutTicks) !=
+            pdTRUE) {
+      avatar.setPresentOnRefresh(false);
+      Serial.println("No panel refresh signal; pacing frames by timer");
+    }
+  }
+  avatar.present();
+}
+
 }  // namespace
 
 void setup() {
@@ -484,6 +520,11 @@ void setup() {
                           M5.Display.height() / 2);
     Serial.println("Avatar sprite allocation failed");
   }
+  panelRefreshSignal = xSemaphoreCreateBinary();
+  pinMode(kPanelRefreshPin, INPUT_PULLUP);
+  attachInterrupt(digitalPinToInterrupt(kPanelRefreshPin), onPanelRefresh,
+                  RISING);
+  avatar.setPresentOnRefresh(true);
 
   Serial.println("Expression device started");
   Serial.println(
@@ -514,6 +555,11 @@ void loop() {
     handleImuInteraction(nowMs);
     handleSerialCommands(nowMs);
     avatar.update(nowMs);
+    if (avatar.framePending()) {
+      presentOnPanelRefresh();
+      // Waiting for the panel refresh already yielded the CPU.
+      return;
+    }
   }
 
   // A short cooperative yield keeps input responsive without quantizing the

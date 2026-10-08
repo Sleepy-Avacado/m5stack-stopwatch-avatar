@@ -1152,8 +1152,6 @@ void AvatarEngine::presentRegion(const DirtyRect& rect) {
   const int bottom =
       std::min<int>(M5.Display.height(), (rect.y + rect.height + 1) & ~1);
 
-  // Each region is its own write transaction, so the frame buffer sends only
-  // this region to the panel rather than the whole span between both eyes.
   M5.Display.startWrite();
   for (int x = left; x < right; x += kBandWidth) {
     const int columns = std::min(kBandWidth, right - x);
@@ -1170,7 +1168,6 @@ void AvatarEngine::presentRegion(const DirtyRect& rect) {
 }
 
 void AvatarEngine::render(uint32_t nowMs) {
-  const uint32_t renderStartedUs = micros();
   updateInteraction(nowMs);
   const int width = M5.Display.width();
   const int height = M5.Display.height();
@@ -1280,6 +1277,9 @@ void AvatarEngine::render(uint32_t nowMs) {
   const DirtyRect rightBounds =
       shapeBounds(leftShapeCount, rasterizer_.shapeCount());
 
+  // Draw into the frame buffer only; update() or present() sends it to the
+  // panel, while other drawing code keeps its automatic flush.
+  M5.Display.setAutoDisplay(false);
   if (requiresFullClear_) {
     M5.Display.fillScreen(kBackground);
     requiresFullClear_ = false;
@@ -1294,26 +1294,24 @@ void AvatarEngine::render(uint32_t nowMs) {
     presentRegion(leftRegion);
     presentRegion(rightRegion);
   }
+  M5.Display.setAutoDisplay(true);
 
   previousLeftBounds_ = leftBounds;
   previousRightBounds_ = rightBounds;
-  recordRenderMetrics(nowMs, renderStartedUs, micros());
 }
 
-void AvatarEngine::recordRenderMetrics(uint32_t nowMs,
-                                       uint32_t renderStartedUs,
-                                       uint32_t renderFinishedUs) {
-  const uint32_t renderTimeUs = renderFinishedUs - renderStartedUs;
-  totalRenderTimeUs_ += renderTimeUs;
-  maximumRenderTimeUs_ = std::max(maximumRenderTimeUs_, renderTimeUs);
+void AvatarEngine::recordRenderMetrics(uint32_t nowMs, uint32_t frameWorkUs,
+                                       uint32_t frameStartedUs) {
+  totalRenderTimeUs_ += frameWorkUs;
+  maximumRenderTimeUs_ = std::max(maximumRenderTimeUs_, frameWorkUs);
   ++metricsFrameCount_;
 
   if (previousRenderStartedUs_ != 0) {
-    const uint32_t intervalUs = renderStartedUs - previousRenderStartedUs_;
+    const uint32_t intervalUs = frameStartedUs - previousRenderStartedUs_;
     totalFrameIntervalUs_ += intervalUs;
     maximumFrameIntervalUs_ = std::max(maximumFrameIntervalUs_, intervalUs);
   }
-  previousRenderStartedUs_ = renderStartedUs;
+  previousRenderStartedUs_ = frameStartedUs;
 
   const uint32_t windowMs = nowMs - metricsStartedMs_;
   if (windowMs < kMetricsReportIntervalMs || metricsFrameCount_ == 0) return;
@@ -1354,19 +1352,42 @@ void AvatarEngine::update(uint32_t nowMs) {
   advanceTimeline(nowMs);
 
   const uint32_t nowUs = micros();
-  const bool frameDue =
-      nextFrameUs_ == 0 || static_cast<int32_t>(nowUs - nextFrameUs_) >= 0;
-  if (!forceRender_ && !frameDue) return;
-
-  if (forceRender_ || nextFrameUs_ == 0) {
-    nextFrameUs_ = nowUs + kFrameIntervalUs;
+  if (presentOnRefresh_) {
+    if (framePending_) return;
   } else {
-    nextFrameUs_ += kFrameIntervalUs;
-    if (static_cast<int32_t>(nowUs - nextFrameUs_) >=
-        static_cast<int32_t>(kFrameIntervalUs * 2)) {
+    const bool frameDue =
+        nextFrameUs_ == 0 || static_cast<int32_t>(nowUs - nextFrameUs_) >= 0;
+    if (!forceRender_ && !frameDue) return;
+
+    if (forceRender_ || nextFrameUs_ == 0) {
       nextFrameUs_ = nowUs + kFrameIntervalUs;
+    } else {
+      nextFrameUs_ += kFrameIntervalUs;
+      if (static_cast<int32_t>(nowUs - nextFrameUs_) >=
+          static_cast<int32_t>(kFrameIntervalUs * 2)) {
+        nextFrameUs_ = nowUs + kFrameIntervalUs;
+      }
     }
   }
   forceRender_ = false;
+
+  const uint32_t renderStartedUs = micros();
   render(nowMs);
+  if (presentOnRefresh_) {
+    framePending_ = true;
+    pendingRenderUs_ = micros() - renderStartedUs;
+    return;
+  }
+  M5.Display.display();
+  recordRenderMetrics(nowMs, micros() - renderStartedUs, renderStartedUs);
+}
+
+void AvatarEngine::present() {
+  if (!framePending_) return;
+  const uint32_t presentStartedUs = micros();
+  M5.Display.display();
+  framePending_ = false;
+  recordRenderMetrics(millis(),
+                      pendingRenderUs_ + (micros() - presentStartedUs),
+                      presentStartedUs);
 }

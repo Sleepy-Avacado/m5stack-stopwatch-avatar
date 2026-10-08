@@ -116,6 +116,12 @@ class AvatarEngine {
                      float motionLeadX = 0.0f, float motionLeadY = 0.0f);
   void setShakeTarget(float normalizedX, float normalizedY, float intensity);
   void invalidate();
+  // When enabled, update() draws a frame only after the previous one has
+  // been presented and leaves it in the frame buffer until present(), so the
+  // caller can send it in step with the panel's refresh.
+  void setPresentOnRefresh(bool enabled) { presentOnRefresh_ = enabled; }
+  bool framePending() const { return framePending_; }
+  void present();
 
   ExpressionId activeExpression() const { return targetExpression_; }
   ExpressionId baseExpression() const { return baseExpression_; }
@@ -166,8 +172,8 @@ class AvatarEngine {
   DirtyRect shapeBounds(uint8_t first, uint8_t end) const;
   void presentRegion(const DirtyRect& rect);
   float blinkScale(uint32_t nowMs);
-  void recordRenderMetrics(uint32_t nowMs, uint32_t renderStartedUs,
-                           uint32_t renderFinishedUs);
+  void recordRenderMetrics(uint32_t nowMs, uint32_t frameWorkUs,
+                           uint32_t frameStartedUs);
 
   bool ready_ = false;
   bool forceRender_ = true;
@@ -228,6 +234,9 @@ class AvatarEngine {
   int8_t swipePreviewDirection_ = 0;
   uint32_t lastInteractionUpdateMs_ = 0;
   uint32_t nextFrameUs_ = 0;
+  bool presentOnRefresh_ = false;
+  bool framePending_ = false;
+  uint32_t pendingRenderUs_ = 0;
   uint32_t metricsStartedMs_ = 0;
   uint32_t metricsFrameCount_ = 0;
   uint32_t totalRenderTimeUs_ = 0;
