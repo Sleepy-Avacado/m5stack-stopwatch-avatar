@@ -11,6 +11,22 @@ KK is a procedural avatar built for the M5Stack StopWatch's circular AMOLED disp
 
 > Community project. Not affiliated with or endorsed by M5Stack.
 
+<p align="center">
+  <img src="docs/media/kk-preview.gif" width="360" alt="KK on the round display moving through idle, happy, surprised, curious, angry, dizzy and sleepy">
+</p>
+
+## Preview
+
+The 12 expressions:
+
+![KK's 12 expressions: idle, listening, thinking, happy, excited, curious, confused, angry, surprised, sad, sleepy and dizzy](docs/media/kk-expressions.png)
+
+Before and after the anti-aliased renderer, with 3× close-ups and frame times measured on a StopWatch. Click the image to watch the video.
+
+[![Original whole-pixel rendering beside the anti-aliased renderer, with 3x close-ups of the angry eye and measured frame times](docs/media/kk-before-after.png)](docs/media/kk-before-after.mp4)
+
+These previews are rendered on a computer by the firmware's own drawing code, so they show the pixels the firmware sends to the display.
+
 ## Highlights
 
 - 12 procedural expressions: `idle`, `listening`, `thinking`, `happy`, `excited`, `curious`, `confused`, `angry`, `surprised`, `sad`, `sleepy` and `dizzy`;

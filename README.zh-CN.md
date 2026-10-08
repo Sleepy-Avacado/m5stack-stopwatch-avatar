@@ -11,6 +11,22 @@ KK 运行在 M5Stack StopWatch 的圆形 AMOLED 屏幕上。它的眼睛、眼�
 
 > 这是一个社区项目，与 M5Stack 官方没有隶属或背书关系。
 
+<p align="center">
+  <img src="docs/media/kk-preview.gif" width="360" alt="KK 在圆屏上依次展示待机、开心、惊讶、好奇、生气、眩晕和困倦">
+</p>
+
+## 预览
+
+12 种表情：
+
+![KK 的 12 种表情：idle、listening、thinking、happy、excited、curious、confused、angry、surprised、sad、sleepy、dizzy](docs/media/kk-expressions.png)
+
+抗锯齿渲染前后对比，包含 3 倍局部放大和在 StopWatch 真机上测得的单帧耗时。点击图片观看视频。
+
+[![原整数像素渲染与抗锯齿渲染并排对比，包含生气表情眼睛的 3 倍放大和实测单帧耗时](docs/media/kk-before-after.png)](docs/media/kk-before-after.mp4)
+
+以上预览由固件自身的绘制代码在电脑上渲染，与固件发送到屏幕的像素一致。
+
 ## 主要特点
 
 - 12 种程序化表情：`idle`、`listening`、`thinking`、`happy`、`excited`、`curious`、`confused`、`angry`、`surprised`、`sad`、`sleepy`、`dizzy`；
